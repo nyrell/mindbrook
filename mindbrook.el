@@ -3,6 +3,14 @@
 ;; Author: Mattias Nyrell <mattias@nyrell.se>
 ;; Version: 0.2.0
 ;; Package-Requires: ((emacs "27.1"))
+;; URL: https://github.com/nyrell/mindbrook
+;; Keywords: convenience
+;; SPDX-License-Identifier: MIT
+
+;; Copyright (c) 2026 Mattias Nyrell
+
+;; This file is not part of GNU Emacs.  It is distributed under the MIT
+;; License; see the LICENSE file for the full text.
 
 ;;; Commentary:
 
