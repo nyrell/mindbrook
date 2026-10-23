@@ -2,7 +2,7 @@
 
 Mindbrook is a lightweight application to easily create persistent scratchpads from templates. Created as a simpler, more light weight, alternative to the [Mindstream package](https://github.com/countvajhula/mindstream).
 
-Scratchpads are stored as simple text files, created from a set of templates that you create yourself.
+Scratchpads are stored as simple text files, created from a set of templates that you create yourself, or created dynamically from a gptel-agent session.
 
 # Installation
 
