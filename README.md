@@ -40,6 +40,12 @@ You can also set these variables directly in your Emacs configuration, for examp
 (global-set-key (kbd "C-c s") 'mindbrook-new)
 ```
 
+## gptel-agent scratchpads
+
+If [gptel-agent](https://github.com/karthink/gptel-agent) is installed, `mindbrook-new-gptel-agent` starts an agent session whose buffer is a scratchpad in `mindbrook-dir`, named `<timestamp> gptel-agent.md`. With a prefix argument it asks for the project directory, like `gptel-agent`.
+
+The first time you save the conversation, gptel suggests a topic. You can edit it in the minibuffer, and the file is then renamed in place to `<timestamp> <topic>.md`. Leave the topic empty to keep the placeholder and be asked again on the next save. `mindbrook-gptel-topic-timeout` sets how long to wait for the suggestion.
+
 ## Example: BASB/PARA setup
 
 Personally I use these scratchpads as part of a [BASB/PARA](https://www.buildingasecondbrain.com/para) setup, where I have the following directory structure:
