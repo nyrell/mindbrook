@@ -1,7 +1,7 @@
 ;;; mindbrook.el --- Persistent scratchpads from templates  -*- lexical-binding: t; -*-
 
 ;; Author: Mattias Nyrell <mattias@nyrell.se>
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "27.1"))
 
 ;;; Commentary:
 
@@ -46,7 +46,7 @@ A simpler, more lightweight alternative to the Mindstream package."
 
 (defcustom mindbrook-gptel-topic-context-size 4000
   "Number of characters from the start of a conversation sent for a topic."
-  :type 'natnum
+  :type 'integer
   :group 'mindbrook)
 
 ;; (setq mindbrook-dir (file-name-concat my-org-dir "org-scratchpads"))
@@ -62,8 +62,7 @@ A simpler, more lightweight alternative to the Mindstream package."
          (file-ext (file-name-extension template-file))
          (topic-name (read-string "Enter topic name for new scratchpad: "))
          (timestamp (format-time-string mindbrook-date-format))
-         (new-file-name (expand-file-name (format "%s %s.%s" timestamp topic-name file-ext) mindbrook-dir))
-         )
+         (new-file-name (expand-file-name (format "%s %s.%s" timestamp topic-name file-ext) mindbrook-dir)))
     (with-current-buffer (find-file-noselect new-file-name)
       (insert-file-contents template-file-path)
 
@@ -124,7 +123,7 @@ The file-local variables block that gptel appends on save is left out."
   (let ((clean (string-trim
                 (replace-regexp-in-string
                  "[[:space:]]+" " "
-                 (replace-regexp-in-string "[\\\\/:*?\"<>|.#]+" " "
+                 (replace-regexp-in-string "[\\/:*?\"<>|.#]+" " "
                                            (or topic ""))))))
     (unless (string-empty-p clean) clean)))
 
@@ -197,8 +196,11 @@ place.  An empty answer keeps the placeholder until the next save."
           (message nil)
           (when topic
             ;; Keep the major mode, and with it the gptel state.
-            (let ((change-major-mode-with-file-name nil))
-              (rename-visited-file (mindbrook--gptel-topic-file-name topic)))
+            (let ((change-major-mode-with-file-name nil)
+                  (new (mindbrook--gptel-topic-file-name topic)))
+              (when (file-exists-p buffer-file-name)
+                (rename-file buffer-file-name new))
+              (set-visited-file-name new nil t))
             (remove-hook 'before-save-hook #'mindbrook--gptel-name-on-save t)))))))
 
 (defun mindbrook--extension-for-mode ()
