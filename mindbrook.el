@@ -1,6 +1,7 @@
 ;;; mindbrook.el --- Persistent scratchpads from templates  -*- lexical-binding: t; -*-
 
 ;; Author: Mattias Nyrell <mattias@nyrell.se>
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "27.1"))
 
 ;;; Commentary:
