@@ -42,9 +42,9 @@ You can also set these variables directly in your Emacs configuration, for examp
 
 ## gptel-agent scratchpads
 
-If [gptel-agent](https://github.com/karthink/gptel-agent) is installed, `mindbrook-new-gptel-agent` starts an agent session whose buffer is a scratchpad in `mindbrook-dir`, named `<timestamp> gptel-agent.md`. With a prefix argument it asks for the project directory, like `gptel-agent`.
+If [gptel-agent](https://github.com/karthink/gptel-agent) is installed, `mindbrook-new-gptel-agent` starts an agent session whose buffer is a scratchpad in `mindbrook-dir`, named `<timestamp> gptel-agent.md` (`.org` or `.txt` if gptel uses `org-mode` or `text-mode`). With a prefix argument it asks for the project directory, like `gptel-agent`.
 
-The first time you save the conversation, gptel suggests a topic. You can edit it in the minibuffer, and the file is then renamed in place to `<timestamp> <topic>.md`. Leave the topic empty to keep the placeholder and be asked again on the next save. `mindbrook-gptel-topic-timeout` sets how long to wait for the suggestion.
+The first time you save the conversation, gptel suggests a topic. You can edit it in the minibuffer, and the file is then renamed in place to `<timestamp> <topic>.md`. Only the start of the conversation is sent (`mindbrook-gptel-topic-context-size` characters), and `C-g` while waiting skips the suggestion without stopping the save. Leave the topic empty to keep the placeholder and be asked again on the next save. `mindbrook-gptel-topic-timeout` sets how long to wait for the suggestion.
 
 ## Example: BASB/PARA setup
 

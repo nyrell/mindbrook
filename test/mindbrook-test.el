@@ -159,9 +159,100 @@ returns its header-line form instead of the buffer."
             (with-current-buffer buf
               (should (equal (file-name-directory buffer-file-name)
                              (expand-file-name mindbrook-dir)))
-              (should (string-suffix-p " gptel-agent.md" buffer-file-name))
+              (should (string-suffix-p " gptel-agent.txt" buffer-file-name))
               (should (memq #'mindbrook--gptel-name-on-save before-save-hook))))
         (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))))
+
+(ert-deftest mindbrook-test-conversation-ignores-early-local-variables ()
+  "Only a block near the end counts as the file-local variables block."
+  (with-temp-buffer
+    (let ((text (concat "### What does Local Variables: do?\n\n"
+                        (make-string 4000 ?x))))
+      (insert text)
+      (should (equal (mindbrook--gptel-conversation) text)))))
+
+(ert-deftest mindbrook-test-topic-request-sends-start-of-conversation ()
+  (let ((mindbrook-gptel-topic-context-size 100)
+        sent)
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (prompt &rest args)
+                 (setq sent prompt)
+                 (funcall (plist-get args :callback) "Topic" nil))))
+      (should (equal (mindbrook--gptel-request-topic (make-string 500 ?x))
+                     "Topic"))
+      (should (equal sent (make-string 100 ?x))))))
+
+(ert-deftest mindbrook-test-quit-while-waiting-keeps-saving ()
+  "\\[keyboard-quit] while waiting for a topic only skips the suggestion."
+  (mindbrook-test--with-dir
+    (let* ((old (expand-file-name "2026-10-23 101010 gptel-agent.md" mindbrook-dir))
+           (buf (mindbrook-test--scratchpad old "### hello"))
+           (offered 'unset))
+      (unwind-protect
+          (cl-letf (((symbol-function 'gptel-request) #'ignore)
+                    ((symbol-function 'accept-process-output)
+                     (lambda (&rest _) (signal 'quit nil)))
+                    ((symbol-function 'read-string)
+                     (lambda (_prompt initial) (setq offered initial) "")))
+            (with-current-buffer buf
+              (save-buffer)
+              (should-not offered)
+              (should-not (buffer-modified-p))
+              (should (equal buffer-file-name old))))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)))))
+
+(ert-deftest mindbrook-test-rename-keeps-major-mode ()
+  "Renaming must not re-pick the major mode and lose the gptel state."
+  (mindbrook-test--with-dir
+    (let* ((old (expand-file-name "2026-10-23 101010 gptel-agent.md" mindbrook-dir))
+           (buf (mindbrook-test--scratchpad old "* hello")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'gptel-request)
+                     (mindbrook-test--async-request "Greeting"))
+                    ((symbol-function 'read-string)
+                     (lambda (_prompt initial) initial)))
+            (with-current-buffer buf
+              (org-mode)
+              (setq-local gptel-mode t)
+              (add-hook 'before-save-hook #'mindbrook--gptel-name-on-save -50 t)
+              (save-buffer)
+              (should (string-suffix-p " Greeting.md" buffer-file-name))
+              (should (eq major-mode 'org-mode))
+              (should gptel-mode)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)))))
+
+(defun mindbrook-test--new-agent (mode)
+  "Run `mindbrook-new-gptel-agent' with a fake agent buffer in MODE.
+Return the list (FILE-NAME MAJOR-MODE GPTEL-MODE) of the new buffer."
+  (let (agent-buf)
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel-agent)
+                   (lambda (&rest _)
+                     (interactive)
+                     (setq agent-buf (generate-new-buffer "*gptel-agent:test*"))
+                     (with-current-buffer agent-buf
+                       (funcall mode)
+                       (setq-local gptel-mode t))))
+                  ((symbol-function 'pop-to-buffer) #'ignore))
+          (with-current-buffer (mindbrook-new-gptel-agent)
+            (list (file-name-nondirectory buffer-file-name) major-mode gptel-mode)))
+      (when (buffer-live-p agent-buf)
+        (with-current-buffer agent-buf (set-buffer-modified-p nil))
+        (kill-buffer agent-buf)))))
+
+(ert-deftest mindbrook-test-new-agent-extension-follows-mode ()
+  "The file extension matches the agent buffer's mode, which is kept."
+  (mindbrook-test--with-dir
+    (pcase-let ((`(,file ,mode ,gptel) (mindbrook-test--new-agent #'org-mode)))
+      (should (string-suffix-p " gptel-agent.org" file))
+      (should (eq mode 'org-mode))
+      (should gptel))
+    (pcase-let ((`(,file ,mode ,gptel) (mindbrook-test--new-agent #'text-mode)))
+      (should (string-suffix-p " gptel-agent.txt" file))
+      (should (eq mode 'text-mode))
+      (should gptel))))
 
 (provide 'mindbrook-test)
 

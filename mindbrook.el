@@ -1,5 +1,6 @@
 ;;; mindbrook.el --- Persistent scratchpads from templates  -*- lexical-binding: t; -*-
 
+;; Author: Mattias Nyrell <mattias@nyrell.se>
 ;; Package-Requires: ((emacs "29.1"))
 
 ;;; Commentary:
@@ -11,10 +12,12 @@
 
 ;;; Code:
 
+(require 'seq)
 (require 'subr-x)
 
 (defgroup mindbrook nil
-  "A lightweight application to easily create persistent scratchpads from templates. Created as a simpler, more light weight, alternative to the Mindstream package."
+  "Easily create persistent scratchpads from templates.
+A simpler, more lightweight alternative to the Mindstream package."
   ;; :link ""
   :group 'convenience)
 
@@ -39,6 +42,11 @@
 (defcustom mindbrook-gptel-topic-timeout 30
   "Seconds to wait for gptel to suggest a topic when first saving."
   :type 'number
+  :group 'mindbrook)
+
+(defcustom mindbrook-gptel-topic-context-size 4000
+  "Number of characters from the start of a conversation sent for a topic."
+  :type 'natnum
   :group 'mindbrook)
 
 ;; (setq mindbrook-dir (file-name-concat my-org-dir "org-scratchpads"))
@@ -78,7 +86,8 @@
 (defvar gptel-use-tools)
 (defvar gptel-prompt-prefix-alist)
 (declare-function gptel-agent "ext:gptel-agent" (&optional project-dir agent-preset))
-(declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
+;; A `cl-defun' with keyword arguments, so leave its arglist unchecked.
+(declare-function gptel-request "ext:gptel-request" t)
 
 (defconst mindbrook--gptel-placeholder "gptel-agent"
   "Topic used in the file name until the conversation has been named.")
@@ -94,13 +103,16 @@ The file-local variables block that gptel appends on save is left out."
     (save-restriction
       (widen)
       (goto-char (point-max))
-      (let ((end (if (re-search-backward "^.*Local Variables:" nil t)
+      ;; Like `hack-local-variables', only look near the end of the buffer.
+      (let ((end (if (re-search-backward "^.*Local Variables:"
+                                         (max (point-min) (- (point-max) 3000))
+                                         t)
                      (line-beginning-position)
                    (point-max))))
         (string-trim (buffer-substring-no-properties (point-min) end))))))
 
 (defun mindbrook--gptel-has-conversation-p (text)
-  "Return non-nil if TEXT holds more than empty gptel prompt prefixes."
+  "Return non-nil if TEXT has more in it than empty gptel prompt prefixes."
   (let ((prefixes (mapcar #'string-trim (mapcar #'cdr (bound-and-true-p gptel-prompt-prefix-alist)))))
     (not (string-empty-p
           (string-trim
@@ -124,7 +136,8 @@ than `mindbrook-gptel-topic-timeout' seconds."
         (topic nil))
     ;; The agent preset enables tools; a topic request must not use them.
     (let ((gptel-use-tools nil))
-      (gptel-request text
+      (gptel-request (substring text 0 (min (length text)
+                                            mindbrook-gptel-topic-context-size))
         :system mindbrook--gptel-topic-prompt
         :stream nil
         :transforms nil
@@ -133,9 +146,12 @@ than `mindbrook-gptel-topic-timeout' seconds."
                            (setq topic response done t))
                           ((not (consp response)) ;nil or `abort'
                            (setq done t))))))
-    (with-timeout (mindbrook-gptel-topic-timeout)
-      (while (not done)
-        (accept-process-output nil 0.1)))
+    ;; A quit only gives up on the suggestion; the save goes on.
+    (condition-case nil
+        (with-timeout (mindbrook-gptel-topic-timeout)
+          (while (not done)
+            (accept-process-output nil 0.1)))
+      (quit nil))
     (and topic
          (mindbrook--sanitize-topic
           (car (split-string topic "\n" t "[ \t]+"))))))
@@ -174,32 +190,38 @@ place.  An empty answer keeps the placeholder until the next save."
       (remove-hook 'before-save-hook #'mindbrook--gptel-name-on-save t)
     (let ((text (mindbrook--gptel-conversation)))
       (when (mindbrook--gptel-has-conversation-p text)
-        (message "mindbrook: asking gptel for a topic...")
+        (message "Asking gptel for a scratchpad topic...")
         (let* ((suggestion (mindbrook--gptel-request-topic text))
                (topic (mindbrook--sanitize-topic
                        (read-string "Scratchpad topic: " suggestion))))
           (message nil)
           (when topic
-            (rename-visited-file (mindbrook--gptel-topic-file-name topic))
+            ;; Keep the major mode, and with it the gptel state.
+            (let ((change-major-mode-with-file-name nil))
+              (rename-visited-file (mindbrook--gptel-topic-file-name topic)))
             (remove-hook 'before-save-hook #'mindbrook--gptel-name-on-save t)))))))
+
+(defun mindbrook--extension-for-mode ()
+  "Return the file name extension that suits the current major mode."
+  (cond ((derived-mode-p 'org-mode) "org")
+        ((derived-mode-p 'markdown-mode) "md")
+        (t "txt")))
 
 ;;;###autoload
 (defun mindbrook-new-gptel-agent ()
   "Start a `gptel-agent' session stored as a scratchpad in `mindbrook-dir'.
 
 The file is named like other scratchpads, with \"gptel-agent\" as a
-placeholder topic.  On the first save of a conversation gptel suggests
-a topic, and the file is renamed to use it.  With a prefix argument,
-ask for the project directory, as `gptel-agent' does."
+placeholder topic and an extension that suits the buffer's major mode.
+On the first save of a conversation gptel suggests a topic, and the
+file is renamed to use it.  With a prefix argument, ask for the project
+directory, as `gptel-agent' does."
   (interactive)
   (unless (fboundp 'gptel-agent)
-    (user-error "mindbrook: the gptel-agent package is not installed"))
-  (let* ((file (expand-file-name
-                (format "%s %s.md" (format-time-string mindbrook-date-format)
-                        mindbrook--gptel-placeholder)
-                mindbrook-dir))
-         (before (buffer-list))
-         buf)
+    (user-error "The gptel-agent package is not installed"))
+  (let ((stamp (format-time-string mindbrook-date-format))
+        (before (buffer-list))
+        buf)
     (make-directory mindbrook-dir t)
     ;; `gptel-agent' does not return its buffer, so find the new one.
     (call-interactively #'gptel-agent)
@@ -208,9 +230,15 @@ ask for the project directory, as `gptel-agent' does."
                                (buffer-local-value 'gptel-mode b)))
                         (buffer-list)))
     (unless buf
-      (error "mindbrook: could not find the new gptel-agent buffer"))
+      (error "Could not find the new gptel-agent buffer"))
     (with-current-buffer buf
-      (set-visited-file-name file t t)
+      ;; Keep the major mode, and with it the gptel state.
+      (let ((change-major-mode-with-file-name nil))
+        (set-visited-file-name
+         (expand-file-name (format "%s %s.%s" stamp mindbrook--gptel-placeholder
+                                   (mindbrook--extension-for-mode))
+                           mindbrook-dir)
+         t t))
       (add-hook 'before-save-hook #'mindbrook--gptel-name-on-save -50 t))
     (pop-to-buffer buf)
     buf))
