@@ -2,7 +2,7 @@
 
 Mindbrook is a lightweight application to easily create persistent scratchpads from templates. Created as a simpler, more light weight, alternative to the [Mindstream package](https://github.com/countvajhula/mindstream).
 
-Scratchpads are stored as simple text files, created from a set of templates that you create yourself, or created dynamically from a gptel-agent session.
+Scratchpads are stored as simple text files, created from a set of templates that you create yourself, or saved from any buffer.
 
 # Installation
 
@@ -40,11 +40,25 @@ You can also set these variables directly in your Emacs configuration, for examp
 (global-set-key (kbd "C-c s") 'mindbrook-new)
 ```
 
-## gptel-agent scratchpads
+## Saving any buffer as a scratchpad
 
-If [gptel-agent](https://github.com/karthink/gptel-agent) is installed, `mindbrook-new-gptel-agent` starts an agent session whose buffer is a scratchpad in `mindbrook-dir`, named `<timestamp> gptel-agent.md` (`.org` or `.txt` if gptel uses `org-mode` or `text-mode`). With a prefix argument it asks for the project directory, like `gptel-agent`.
+`mindbrook-save-as-scratchpad` saves the current buffer as a scratchpad in `mindbrook-dir`. You pick the file name in the minibuffer from suggestions that start with the current timestamp, or type your own, including the extension.
 
-The first time you save the conversation, gptel suggests a topic. You can edit it in the minibuffer, and the file is then renamed in place to `<timestamp> <topic>.md`. Only the start of the conversation is sent (`mindbrook-gptel-topic-context-size` characters), and `C-g` while waiting skips the suggestion without stopping the save. Leave the topic empty to keep the placeholder and be asked again on the next save. `mindbrook-gptel-topic-timeout` sets how long to wait for the suggestion.
+* A buffer that is not visiting a file is saved to the new scratchpad. The suggested extension follows the major mode (`.org`, `.md` or `.txt`).
+* For a buffer visiting a file you choose to **copy** or **move** the file. After a copy you are switched to the copy; after a move the buffer follows the file. A buffer with unsaved changes must be saved first. One suggestion is the current file name prefixed with the timestamp.
+* Files already in `mindbrook-dir`, and buffers such as Dired or help buffers, are refused.
+
+### AI topic suggestions
+
+If [gptel](https://github.com/karthink/gptel) is installed and `mindbrook-ai-topic` is set to `ask`, you are asked whether to send the start of the buffer to gptel, which then suggests a topic for the file name. If the region is active, only the region is sent. Nothing is sent for a blank buffer, and the default (`nil`) never sends anything.
+
+* `mindbrook-ai-topic-context-size`: the number of characters sent, default 4000.
+* `mindbrook-ai-topic-timeout`: seconds to wait for the suggestion, default 30. `C-g` while waiting skips it.
+
+```elisp
+(setq mindbrook-ai-topic 'ask)
+(global-set-key (kbd "C-c S") 'mindbrook-save-as-scratchpad)
+```
 
 ## Example: BASB/PARA setup
 

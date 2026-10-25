@@ -1,7 +1,7 @@
 ;;; mindbrook.el --- Persistent scratchpads from templates  -*- lexical-binding: t; -*-
 
 ;; Author: Mattias Nyrell <mattias@nyrell.se>
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; URL: https://github.com/nyrell/mindbrook
 ;; Keywords: convenience
@@ -14,10 +14,9 @@
 
 ;;; Commentary:
 
-;; Create persistent scratchpads from templates.  `mindbrook-new-gptel-agent'
-;; starts a `gptel-agent' session stored as a scratchpad under
-;; `mindbrook-dir', named from an AI summary of the conversation on the
-;; first save.
+;; Create persistent scratchpads from templates with `mindbrook-new', or
+;; save any buffer as a scratchpad with `mindbrook-save-as-scratchpad',
+;; optionally named from a topic suggested by gptel.
 
 ;;; Code:
 
@@ -48,13 +47,22 @@ A simpler, more lightweight alternative to the Mindstream package."
   :type 'string
   :group 'mindbrook)
 
-(defcustom mindbrook-gptel-topic-timeout 30
-  "Seconds to wait for gptel to suggest a topic when first saving."
+(defcustom mindbrook-ai-topic nil
+  "Whether `mindbrook-save-as-scratchpad' may ask gptel for a topic.
+When nil, no AI topic is suggested.  When `ask', confirm before any
+buffer text is sent to gptel."
+  :type '(choice (const :tag "Off" nil)
+                 (const :tag "Ask before sending" ask))
+  :group 'mindbrook)
+
+(defcustom mindbrook-ai-topic-timeout 30
+  "Seconds to wait for gptel to suggest a topic."
   :type 'number
   :group 'mindbrook)
 
-(defcustom mindbrook-gptel-topic-context-size 4000
-  "Number of characters from the start of a conversation sent for a topic."
+(defcustom mindbrook-ai-topic-context-size 4000
+  "Number of characters from the start of the buffer sent for a topic.
+If the region is active, its start is sent instead."
   :type 'integer
   :group 'mindbrook)
 
@@ -88,44 +96,15 @@ A simpler, more lightweight alternative to the Mindstream package."
 
     (find-file new-file-name)))
 
-;;;; gptel-agent scratchpads
+;;;; Saving buffers as scratchpads
 
-(defvar gptel-mode)
 (defvar gptel-use-tools)
-(defvar gptel-prompt-prefix-alist)
-(declare-function gptel-agent "ext:gptel-agent" (&optional project-dir agent-preset))
 ;; A `cl-defun' with keyword arguments, so leave its arglist unchecked.
 (declare-function gptel-request "ext:gptel-request" t)
 
-(defconst mindbrook--gptel-placeholder "gptel-agent"
-  "Topic used in the file name until the conversation has been named.")
-
-(defconst mindbrook--gptel-topic-prompt
-  "Reply with a short topic of at most six words for the conversation below. Reply with the topic only: no quotes, no punctuation, no explanation."
+(defconst mindbrook--topic-prompt
+  "Reply with a short topic of at most six words for the text below. Reply with the topic only: no quotes, no punctuation, no explanation."
   "System message used to ask gptel for a scratchpad topic.")
-
-(defun mindbrook--gptel-conversation ()
-  "Return the conversation text of the current buffer.
-The file-local variables block that gptel appends on save is left out."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-max))
-      ;; Like `hack-local-variables', only look near the end of the buffer.
-      (let ((end (if (re-search-backward "^.*Local Variables:"
-                                         (max (point-min) (- (point-max) 3000))
-                                         t)
-                     (line-beginning-position)
-                   (point-max))))
-        (string-trim (buffer-substring-no-properties (point-min) end))))))
-
-(defun mindbrook--gptel-has-conversation-p (text)
-  "Return non-nil if TEXT has more in it than empty gptel prompt prefixes."
-  (let ((prefixes (mapcar #'string-trim (mapcar #'cdr (bound-and-true-p gptel-prompt-prefix-alist)))))
-    (not (string-empty-p
-          (string-trim
-           (replace-regexp-in-string
-            (regexp-opt (seq-remove #'string-empty-p prefixes)) "" text))))))
 
 (defun mindbrook--sanitize-topic (topic)
   "Return TOPIC cleaned up for use in a file name, or nil if nothing is left."
@@ -136,17 +115,27 @@ The file-local variables block that gptel appends on save is left out."
                                            (or topic ""))))))
     (unless (string-empty-p clean) clean)))
 
-(defun mindbrook--gptel-request-topic (text)
+(defun mindbrook--topic-text ()
+  "Return the text to send for a topic, or nil if it is blank.
+That is the start of the active region, or else of the buffer, at most
+`mindbrook-ai-topic-context-size' characters."
+  (let* ((beg (if (use-region-p) (region-beginning) (point-min)))
+         (end (if (use-region-p) (region-end) (point-max)))
+         (text (string-trim
+                (buffer-substring-no-properties
+                 beg (min end (+ beg mindbrook-ai-topic-context-size))))))
+    (unless (string-empty-p text) text)))
+
+(defun mindbrook--request-topic (text)
   "Ask gptel for a topic summarizing TEXT and wait for the answer.
 Return the topic string, or nil if the request failed or took longer
-than `mindbrook-gptel-topic-timeout' seconds."
+than `mindbrook-ai-topic-timeout' seconds."
   (let ((done nil)
         (topic nil))
-    ;; The agent preset enables tools; a topic request must not use them.
+    ;; A gptel buffer may enable tools, and a tool call is not a topic.
     (let ((gptel-use-tools nil))
-      (gptel-request (substring text 0 (min (length text)
-                                            mindbrook-gptel-topic-context-size))
-        :system mindbrook--gptel-topic-prompt
+      (gptel-request text
+        :system mindbrook--topic-prompt
         :stream nil
         :transforms nil
         :callback (lambda (response _info)
@@ -154,9 +143,9 @@ than `mindbrook-gptel-topic-timeout' seconds."
                            (setq topic response done t))
                           ((not (consp response)) ;nil or `abort'
                            (setq done t))))))
-    ;; A quit only gives up on the suggestion; the save goes on.
+    ;; A quit only gives up on the suggestion.
     (condition-case nil
-        (with-timeout (mindbrook-gptel-topic-timeout)
+        (with-timeout (mindbrook-ai-topic-timeout)
           (while (not done)
             (accept-process-output nil 0.1)))
       (quit nil))
@@ -164,53 +153,30 @@ than `mindbrook-gptel-topic-timeout' seconds."
          (mindbrook--sanitize-topic
           (car (split-string topic "\n" t "[ \t]+"))))))
 
-(defun mindbrook--gptel-topic-file-name (topic)
-  "Return the visited file name with the placeholder replaced by TOPIC.
-A counter is added if a file with that name already exists."
-  (let* ((dir (file-name-directory buffer-file-name))
-         (ext (file-name-extension buffer-file-name t))
-         (base (concat (string-remove-suffix
-                        mindbrook--gptel-placeholder
-                        (file-name-base buffer-file-name))
-                       topic))
-         (file (expand-file-name (concat base ext) dir))
+(defun mindbrook--ai-topic ()
+  "Return a topic for the current buffer suggested by gptel, or nil.
+Nothing is sent unless `mindbrook-ai-topic' is non-nil, gptel is
+installed, there is text to send and the user agrees to send it."
+  (let ((text (and mindbrook-ai-topic
+                   (fboundp 'gptel-request)
+                   (mindbrook--topic-text))))
+    (when (and text
+               (y-or-n-p (format "Send %d characters of %s to gptel for a topic? "
+                                 (length text) (buffer-name))))
+      (message "Asking gptel for a scratchpad topic...")
+      (prog1 (mindbrook--request-topic text)
+        (message nil)))))
+
+(defun mindbrook--unique-file-name (stamp topic ext)
+  "Return the name \"STAMP TOPIC.EXT\" of a file not yet in `mindbrook-dir'.
+EXT includes its period.  A counter is added if the name is taken."
+  (let* ((base (format "%s %s" stamp topic))
+         (name (concat base ext))
          (n 1))
-    (while (file-exists-p file)
+    (while (file-exists-p (expand-file-name name mindbrook-dir))
       (setq n (1+ n)
-            file (expand-file-name (format "%s %d%s" base n ext) dir)))
-    file))
-
-(defun mindbrook--gptel-placeholder-p ()
-  "Return non-nil if the visited file still has the placeholder topic."
-  (and buffer-file-name
-       (string-suffix-p (concat " " mindbrook--gptel-placeholder)
-                        (file-name-base buffer-file-name))))
-
-(defun mindbrook--gptel-name-on-save ()
-  "Name the scratchpad from an AI summary before it is first saved.
-
-Runs from `before-save-hook' in buffers made by
-`mindbrook-new-gptel-agent'.  While the file name still has the
-placeholder topic and the buffer holds a conversation, gptel is asked
-for a topic, the user may edit it, and the visited file is renamed in
-place.  An empty answer keeps the placeholder until the next save."
-  (if (not (mindbrook--gptel-placeholder-p))
-      (remove-hook 'before-save-hook #'mindbrook--gptel-name-on-save t)
-    (let ((text (mindbrook--gptel-conversation)))
-      (when (mindbrook--gptel-has-conversation-p text)
-        (message "Asking gptel for a scratchpad topic...")
-        (let* ((suggestion (mindbrook--gptel-request-topic text))
-               (topic (mindbrook--sanitize-topic
-                       (read-string "Scratchpad topic: " suggestion))))
-          (message nil)
-          (when topic
-            ;; Keep the major mode, and with it the gptel state.
-            (let ((change-major-mode-with-file-name nil)
-                  (new (mindbrook--gptel-topic-file-name topic)))
-              (when (file-exists-p buffer-file-name)
-                (rename-file buffer-file-name new))
-              (set-visited-file-name new nil t))
-            (remove-hook 'before-save-hook #'mindbrook--gptel-name-on-save t)))))))
+            name (format "%s %d%s" base n ext)))
+    name))
 
 (defun mindbrook--extension-for-mode ()
   "Return the file name extension that suits the current major mode."
@@ -218,41 +184,77 @@ place.  An empty answer keeps the placeholder until the next save."
         ((derived-mode-p 'markdown-mode) "md")
         (t "txt")))
 
-;;;###autoload
-(defun mindbrook-new-gptel-agent ()
-  "Start a `gptel-agent' session stored as a scratchpad in `mindbrook-dir'.
+(defun mindbrook--check-buffer ()
+  "Signal a `user-error' unless the current buffer can be a scratchpad."
+  (when (or (eq (get major-mode 'mode-class) 'special)
+            (derived-mode-p 'special-mode 'dired-mode 'image-mode))
+    (user-error "A %s buffer cannot be saved as a scratchpad" mode-name))
+  (when (and buffer-file-name
+             (file-in-directory-p buffer-file-name mindbrook-dir))
+    (user-error "This file is already in %s" mindbrook-dir))
+  (when (and buffer-file-name (buffer-modified-p))
+    (if (y-or-n-p (format "Save %s first? " (buffer-name)))
+        (save-buffer)
+      (user-error "The buffer must be saved before it can be copied or moved"))))
 
-The file is named like other scratchpads, with \"gptel-agent\" as a
-placeholder topic and an extension that suits the buffer's major mode.
-On the first save of a conversation gptel suggests a topic, and the
-file is renamed to use it.  With a prefix argument, ask for the project
-directory, as `gptel-agent' does."
+(defun mindbrook--read-file-name (candidates)
+  "Read a scratchpad file name, offering CANDIDATES.
+Return the absolute file name in `mindbrook-dir'."
+  (let ((name (string-trim
+               (completing-read "Scratchpad file name: " candidates
+                                nil nil nil nil (car candidates)))))
+    (when (or (string-empty-p name)
+              (not (equal name (file-name-nondirectory name))))
+      (user-error "Not a valid file name: %S" name))
+    (let ((file (expand-file-name name mindbrook-dir)))
+      (when (file-exists-p file)
+        (user-error "%s already exists" file))
+      file)))
+
+;;;###autoload
+(defun mindbrook-save-as-scratchpad ()
+  "Save the current buffer as a scratchpad in `mindbrook-dir'.
+
+A buffer that is not visiting a file is saved to the new scratchpad.
+For a buffer visiting a file, choose whether to copy or move the file
+to `mindbrook-dir'; after a copy the copy is visited, after a move the
+buffer follows the file.  Unsaved changes must be saved first.
+
+The suggested file names start with the current time in
+`mindbrook-date-format'.  One uses a topic suggested by gptel, see
+`mindbrook-ai-topic'; the other the current file or buffer name.  Any
+other file name can be typed instead."
   (interactive)
-  (unless (fboundp 'gptel-agent)
-    (user-error "The gptel-agent package is not installed"))
-  (let ((stamp (format-time-string mindbrook-date-format))
-        (before (buffer-list))
-        buf)
+  (mindbrook--check-buffer)
+  (let* ((file buffer-file-name)
+         (action (and file
+                      (cadr (read-multiple-choice
+                             "Copy or move this file to the scratchpad directory? "
+                             '((?c "copy") (?m "move"))))))
+         (stamp (format-time-string mindbrook-date-format))
+         (ext (if file
+                  (file-name-extension file t)
+                (concat "." (mindbrook--extension-for-mode))))
+         (topic (mindbrook--ai-topic))
+         (current (if file
+                      (file-name-base file)
+                    (or (mindbrook--sanitize-topic (buffer-name)) "scratchpad")))
+         (new (mindbrook--read-file-name
+               (delete-dups
+                (delq nil (list (and topic (mindbrook--unique-file-name stamp topic ext))
+                                (mindbrook--unique-file-name stamp current ext)))))))
     (make-directory mindbrook-dir t)
-    ;; `gptel-agent' does not return its buffer, so find the new one.
-    (call-interactively #'gptel-agent)
-    (setq buf (seq-find (lambda (b)
-                          (and (not (memq b before))
-                               (buffer-local-value 'gptel-mode b)))
-                        (buffer-list)))
-    (unless buf
-      (error "Could not find the new gptel-agent buffer"))
-    (with-current-buffer buf
-      ;; Keep the major mode, and with it the gptel state.
-      (let ((change-major-mode-with-file-name nil))
-        (set-visited-file-name
-         (expand-file-name (format "%s %s.%s" stamp mindbrook--gptel-placeholder
-                                   (mindbrook--extension-for-mode))
-                           mindbrook-dir)
-         t t))
-      (add-hook 'before-save-hook #'mindbrook--gptel-name-on-save -50 t))
-    (pop-to-buffer buf)
-    buf))
+    (pcase action
+      ("copy"
+       (copy-file file new)
+       (find-file new))
+      ("move"
+       (rename-file file new)
+       (set-visited-file-name new nil t))
+      (_
+       (set-visited-file-name new)
+       (save-buffer)))
+    new))
 
 (provide 'mindbrook)
 
