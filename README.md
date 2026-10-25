@@ -44,13 +44,13 @@ You can also set these variables directly in your Emacs configuration, for examp
 
 `mindbrook-save-as-scratchpad` saves the current buffer as a scratchpad in `mindbrook-dir`. You pick the file name in the minibuffer from suggestions that start with the current timestamp, or type your own, including the extension.
 
-* A buffer that is not visiting a file is saved to the new scratchpad. The suggested extension follows the major mode (`.org`, `.md` or `.txt`).
+* A buffer that is not visiting a file is saved to the new scratchpad. The suggested extension follows the major mode (`.org`, `.md` or `.txt`). The buffer keeps its major mode, unless it is in `fundamental-mode`.
 * For a buffer visiting a file you choose to **copy** or **move** the file. After a copy you are switched to the copy; after a move the buffer follows the file. A buffer with unsaved changes must be saved first. One suggestion is the current file name prefixed with the timestamp.
 * Files already in `mindbrook-dir`, and buffers such as Dired or help buffers, are refused.
 
 ### AI topic suggestions
 
-If [gptel](https://github.com/karthink/gptel) is installed and `mindbrook-ai-topic` is set to `ask`, you are asked whether to send the start of the buffer to gptel, which then suggests a topic for the file name. If the region is active, only the region is sent. Nothing is sent for a blank buffer, and the default (`nil`) never sends anything.
+If [gptel](https://github.com/karthink/gptel) is installed and `mindbrook-ai-topic` is set to `ask`, you are asked whether to send the start of the buffer to gptel, which then suggests a topic for the file name. If the region is active, only the region is sent; if it is longer than the limit, you are asked whether to send all of it or only its start. Nothing is sent for a blank buffer, and the default (`nil`) never sends anything.
 
 * `mindbrook-ai-topic-context-size`: the number of characters sent, default 4000.
 * `mindbrook-ai-topic-timeout`: seconds to wait for the suggestion, default 30. `C-g` while waiting skips it.

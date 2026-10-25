@@ -62,7 +62,8 @@ buffer text is sent to gptel."
 
 (defcustom mindbrook-ai-topic-context-size 4000
   "Number of characters from the start of the buffer sent for a topic.
-If the region is active, its start is sent instead."
+If the region is active, the region is sent instead.  A region longer
+than this is sent whole only if the user agrees."
   :type 'integer
   :group 'mindbrook)
 
@@ -98,9 +99,12 @@ If the region is active, its start is sent instead."
 
 ;;;; Saving buffers as scratchpads
 
+(defvar gptel-backend)
+(defvar gptel-model)
 (defvar gptel-use-tools)
 ;; A `cl-defun' with keyword arguments, so leave its arglist unchecked.
 (declare-function gptel-request "ext:gptel-request" t)
+(declare-function gptel-abort "ext:gptel-request" (buf))
 
 (defconst mindbrook--topic-prompt
   "Reply with a short topic of at most six words for the text below. Reply with the topic only: no quotes, no punctuation, no explanation."
@@ -116,39 +120,68 @@ If the region is active, its start is sent instead."
     (unless (string-empty-p clean) clean)))
 
 (defun mindbrook--topic-text ()
-  "Return the text to send for a topic, or nil if it is blank.
-That is the start of the active region, or else of the buffer, at most
-`mindbrook-ai-topic-context-size' characters."
-  (let* ((beg (if (use-region-p) (region-beginning) (point-min)))
-         (end (if (use-region-p) (region-end) (point-max)))
-         (text (string-trim
-                (buffer-substring-no-properties
-                 beg (min end (+ beg mindbrook-ai-topic-context-size))))))
-    (unless (string-empty-p text) text)))
+  "Return the text to send for a topic, or nil if nothing is to be sent.
+That is the active region, or else the buffer, cut to
+`mindbrook-ai-topic-context-size' characters.  Nothing is sent for blank
+text or unless the user agrees.  A region over the limit is sent whole
+if the user wants to."
+  (let* ((region (use-region-p))
+         (all (string-trim
+               (buffer-substring-no-properties
+                (if region (region-beginning) (point-min))
+                (if region (region-end) (point-max)))))
+         (limit mindbrook-ai-topic-context-size)
+         (text (if (> (length all) limit) (substring all 0 limit) all)))
+    (when (and (not (string-empty-p text))
+               (y-or-n-p (format "Send %d characters of %s to gptel for a topic? "
+                                 (length text)
+                                 (if region "the region" (buffer-name)))))
+      (if (and region
+               (> (length all) limit)
+               (y-or-n-p (format "The region is %d characters, over the limit of %d.  Send all of it anyway? "
+                                 (length all) limit)))
+          all
+        text))))
 
 (defun mindbrook--request-topic (text)
   "Ask gptel for a topic summarizing TEXT and wait for the answer.
 Return the topic string, or nil if the request failed or took longer
-than `mindbrook-ai-topic-timeout' seconds."
+than `mindbrook-ai-topic-timeout' seconds.  An unfinished request is
+aborted."
   (let ((done nil)
-        (topic nil))
-    ;; A gptel buffer may enable tools, and a tool call is not a topic.
-    (let ((gptel-use-tools nil))
-      (gptel-request text
-        :system mindbrook--topic-prompt
-        :stream nil
-        :transforms nil
-        :callback (lambda (response _info)
-                    (cond ((stringp response)
-                           (setq topic response done t))
-                          ((not (consp response)) ;nil or `abort'
-                           (setq done t))))))
-    ;; A quit only gives up on the suggestion.
-    (condition-case nil
-        (with-timeout (mindbrook-ai-topic-timeout)
-          (while (not done)
-            (accept-process-output nil 0.1)))
-      (quit nil))
+        (topic nil)
+        (backend gptel-backend)
+        (model gptel-model)
+        ;; A buffer of its own, so `gptel-abort' stops only this request.
+        (buf (generate-new-buffer " *mindbrook-topic*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local gptel-backend backend)
+            (setq-local gptel-model model)
+            ;; A gptel buffer may enable tools, and a tool call is not a topic.
+            (setq-local gptel-use-tools nil))
+          (condition-case err
+              (gptel-request text
+                :buffer buf
+                :system mindbrook--topic-prompt
+                :stream nil
+                :callback (lambda (response _info)
+                            (cond ((stringp response)
+                                   (setq topic response done t))
+                                  ((not (consp response)) ;nil or `abort'
+                                   (setq done t)))))
+            (error (message "gptel request failed: %s" (error-message-string err))
+                   (setq done t)))
+          ;; A quit only gives up on the suggestion.
+          (condition-case nil
+              (with-timeout (mindbrook-ai-topic-timeout)
+                (while (not done)
+                  (accept-process-output nil 0.1)))
+            (quit nil)))
+      (unless done
+        (gptel-abort buf))
+      (kill-buffer buf))
     (and topic
          (mindbrook--sanitize-topic
           (car (split-string topic "\n" t "[ \t]+"))))))
@@ -158,11 +191,9 @@ than `mindbrook-ai-topic-timeout' seconds."
 Nothing is sent unless `mindbrook-ai-topic' is non-nil, gptel is
 installed, there is text to send and the user agrees to send it."
   (let ((text (and mindbrook-ai-topic
-                   (fboundp 'gptel-request)
+                   (require 'gptel nil t)
                    (mindbrook--topic-text))))
-    (when (and text
-               (y-or-n-p (format "Send %d characters of %s to gptel for a topic? "
-                                 (length text) (buffer-name))))
+    (when text
       (message "Asking gptel for a scratchpad topic...")
       (prog1 (mindbrook--request-topic text)
         (message nil)))))
@@ -215,7 +246,8 @@ Return the absolute file name in `mindbrook-dir'."
 (defun mindbrook-save-as-scratchpad ()
   "Save the current buffer as a scratchpad in `mindbrook-dir'.
 
-A buffer that is not visiting a file is saved to the new scratchpad.
+A buffer that is not visiting a file is saved to the new scratchpad,
+keeping its major mode unless that is `fundamental-mode'.
 For a buffer visiting a file, choose whether to copy or move the file
 to `mindbrook-dir'; after a copy the copy is visited, after a move the
 buffer follows the file.  Unsaved changes must be saved first.
@@ -252,8 +284,18 @@ other file name can be typed instead."
        (rename-file file new)
        (set-visited-file-name new nil t))
       (_
-       (set-visited-file-name new)
-       (save-buffer)))
+       (let ((name (buffer-name))
+             ;; Keep the major mode, and with it any buffer-local state,
+             ;; unless there is none to keep.
+             (change-major-mode-with-file-name (eq major-mode 'fundamental-mode)))
+         (condition-case err
+             (progn
+               (set-visited-file-name new)
+               (save-buffer))
+           (t
+            (set-visited-file-name nil)
+            (rename-buffer name)
+            (signal (car err) (cdr err)))))))
     new))
 
 (provide 'mindbrook)
