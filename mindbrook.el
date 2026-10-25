@@ -52,12 +52,14 @@ A simpler, more lightweight alternative to the Mindstream package."
   :group 'mindbrook)
 
 (defun mindbrook--sanitize-topic (topic)
-  "Return TOPIC cleaned up for use in a file name, or nil if nothing is left."
+  "Return TOPIC cleaned up for use in a file name, or nil if nothing is left.
+Dots are kept, except at the start and end."
   (let ((clean (string-trim
                 (replace-regexp-in-string
                  "[[:space:]]+" " "
-                 (replace-regexp-in-string "[\\/:*?\"<>|.#]+" " "
-                                           (or topic ""))))))
+                 (replace-regexp-in-string "[\\/:*?\"<>|#]+" " "
+                                           (or topic "")))
+                "[[:space:].]+" "[[:space:].]+")))
     (unless (string-empty-p clean) clean)))
 
 (defun mindbrook--unique-file-name (stamp topic ext)
