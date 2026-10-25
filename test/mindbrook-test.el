@@ -6,12 +6,6 @@
 (require 'cl-lib)
 (require 'mindbrook)
 
-(defvar gptel-backend nil)
-(defvar gptel-model nil)
-(defvar gptel-use-tools nil)
-;; gptel is stubbed out in these tests, so pretend it is installed.
-(provide 'gptel)
-
 (defmacro mindbrook-test--with-dir (&rest body)
   "Run BODY with `mindbrook-dir' bound to a fresh temporary directory."
   (declare (indent 0))
@@ -23,8 +17,8 @@
   "Run BODY with the prompts of `mindbrook-save-as-scratchpad' stubbed.
 ANSWERS is a plist with :action (\"copy\" or \"move\"), :name (a
 function from the candidate list to the typed name), :send, :all and
-:save (answers to the yes-or-no questions) and :topic (the gptel
-response).
+:save (answers to the yes-or-no questions) and :topic (the response of
+a stubbed `gptel-request', for mindbrook-ai tests).
 The candidates offered are stored in `mindbrook-test--offered'."
   (declare (indent 1))
   `(let ((answers (list ,@answers)))
@@ -79,79 +73,17 @@ The candidates offered are stored in `mindbrook-test--offered'."
     (mindbrook-test--file mindbrook-dir "2026 Rust.md" "")
     (should (equal (mindbrook--unique-file-name "2026" "Rust" ".md") "2026 Rust 2.md"))))
 
-(defmacro mindbrook-test--with-region (beg end &rest body)
-  "Run BODY with the region from BEG to END active."
-  (declare (indent 2))
-  `(let ((transient-mark-mode t))
-     (set-mark ,beg)
-     (goto-char ,end)
-     (activate-mark)
-     ,@body))
-
-(ert-deftest mindbrook-test-topic-text ()
-  (let ((mindbrook-ai-topic-context-size 5))
-    (with-temp-buffer
-      (mindbrook-test--with-answers (:send t)
-        (should-not (mindbrook--topic-text))
-        (insert "  \n\t ")
-        (should-not (mindbrook--topic-text))
-        (erase-buffer)
-        (insert "abcdefghij")
-        (should (equal (mindbrook--topic-text) "abcde"))
-        (mindbrook-test--with-region 4 6
-          (should (equal (mindbrook--topic-text) "de")))))))
-
-(ert-deftest mindbrook-test-long-buffer-is-cut-without-asking ()
-  (let ((mindbrook-ai-topic-context-size 3)
-        (asked nil))
-    (with-temp-buffer
-      (insert "abcdefghij")
-      (cl-letf (((symbol-function 'y-or-n-p)
-                 (lambda (prompt) (push prompt asked) t)))
-        (should (equal (mindbrook--topic-text) "abc")))
-      (should (= (length asked) 1))
-      (should (string-prefix-p "Send 3 characters" (car asked))))))
-
-(ert-deftest mindbrook-test-long-region-asks-after-consent ()
-  "A region over the limit is sent whole only if the user agrees."
-  (let ((mindbrook-ai-topic-context-size 3)
-        (asked nil))
-    (with-temp-buffer
-      (insert "abcdefghij")
-      (mindbrook-test--with-region 2 9
-        (mindbrook-test--with-answers (:send t :all t)
-          (should (equal (mindbrook--topic-text) "bcdefgh")))
-        (mindbrook-test--with-answers (:send t :all nil)
-          (should (equal (mindbrook--topic-text) "bcd")))
-        ;; Declining to send anything asks nothing more.
-        (cl-letf (((symbol-function 'y-or-n-p)
-                   (lambda (prompt) (push prompt asked) nil)))
-          (should-not (mindbrook--topic-text)))
-        (should (equal (length asked) 1))
-        (should (string-prefix-p "Send 3 characters of the region" (car asked)))
-        (should (string-match-p "region is 7 characters, over the limit of 3"
-                                (let (prompt)
-                                  (cl-letf (((symbol-function 'y-or-n-p)
-                                             (lambda (p) (setq prompt p) t)))
-                                    (mindbrook--topic-text))
-                                  prompt)))))
-    (with-temp-buffer
-      (insert "abcdefghij")
-      (mindbrook-test--with-region 2 4
-        (mindbrook-test--with-answers (:send t :all 'unexpected)
-          (should (equal (mindbrook--topic-text) "bc")))))))
-
 (ert-deftest mindbrook-test-unsaved-buffer-is-saved ()
   "An unsaved buffer is saved under the chosen name, keeping its mode."
   (mindbrook-test--with-dir
     (let ((mindbrook-date-format "STAMP")
-          (mindbrook-ai-topic 'ask)
+          (mindbrook-topic-function (lambda () "Rust: borrow checker"))
           (buf (generate-new-buffer "*notes*")))
       (unwind-protect
           (with-current-buffer buf
             (org-mode)
             (insert "* Explain the borrow checker")
-            (mindbrook-test--with-answers (:send t :topic "Rust borrow checker\n")
+            (mindbrook-test--with-answers ()
               (mindbrook-save-as-scratchpad))
             (should (equal mindbrook-test--offered
                            '("STAMP Rust borrow checker.org" "STAMP notes.org")))
@@ -162,102 +94,20 @@ The candidates offered are stored in `mindbrook-test--offered'."
             (should (eq major-mode 'org-mode)))
         (mindbrook-test--kill buf)))))
 
-(ert-deftest mindbrook-test-ai-off-sends-nothing ()
+(ert-deftest mindbrook-test-no-topic-suggested ()
+  "Without a topic, only the current name is offered."
   (mindbrook-test--with-dir
-    (let ((mindbrook-date-format "STAMP")
-          (mindbrook-ai-topic nil)
-          (buf (generate-new-buffer "*notes*")))
-      (unwind-protect
-          (with-current-buffer buf
-            (insert "secret")
-            (setq mindbrook-test--sent nil)
-            (mindbrook-test--with-answers (:send t :topic "Leak")
-              (mindbrook-save-as-scratchpad))
-            (should-not mindbrook-test--sent)
-            (should (equal mindbrook-test--offered '("STAMP notes.txt"))))
-        (mindbrook-test--kill buf)))))
-
-(ert-deftest mindbrook-test-declined-send-sends-nothing ()
-  (mindbrook-test--with-dir
-    (let ((mindbrook-date-format "STAMP")
-          (mindbrook-ai-topic 'ask)
-          (buf (generate-new-buffer "*notes*")))
-      (unwind-protect
-          (with-current-buffer buf
-            (insert "secret")
-            (setq mindbrook-test--sent nil)
-            (mindbrook-test--with-answers (:send nil :topic "Leak")
-              (mindbrook-save-as-scratchpad))
-            (should-not mindbrook-test--sent)
-            (should (equal mindbrook-test--offered '("STAMP notes.txt"))))
-        (mindbrook-test--kill buf)))))
-
-(ert-deftest mindbrook-test-blank-buffer-sends-nothing ()
-  (mindbrook-test--with-dir
-    (let ((mindbrook-ai-topic 'ask)
-          (asked nil)
-          (buf (generate-new-buffer "*notes*")))
-      (unwind-protect
-          (with-current-buffer buf
-            (insert "  \n ")
-            (setq mindbrook-test--sent nil)
-            (mindbrook-test--with-answers (:send t :topic "Nothing")
-              (cl-letf (((symbol-function 'y-or-n-p)
-                         (lambda (&rest _) (setq asked t))))
-                (mindbrook-save-as-scratchpad)))
-            (should-not asked)
-            (should-not mindbrook-test--sent))
-        (mindbrook-test--kill buf)))))
-
-(ert-deftest mindbrook-test-request-uses-own-buffer ()
-  "The request runs in a buffer of its own, with the backend and model
-of the current buffer and tools disabled."
-  (let ((mindbrook-ai-topic-timeout 5)
-        seen)
-    (with-temp-buffer
-      (setq-local gptel-backend 'my-backend)
-      (setq-local gptel-model 'my-model)
-      (setq-local gptel-use-tools t)
-      (cl-letf (((symbol-function 'gptel-request)
-                 (lambda (_text &rest args)
-                   (let ((buf (plist-get args :buffer)))
-                     (setq seen (list buf
-                                      (buffer-local-value 'gptel-backend buf)
-                                      (buffer-local-value 'gptel-model buf)
-                                      (buffer-local-value 'gptel-use-tools buf))))
-                   (funcall (plist-get args :callback) "Topic" nil))))
-        (should (equal (mindbrook--request-topic "text") "Topic"))
-        (should-not (eq (car seen) (current-buffer)))
-        (should-not (buffer-live-p (car seen)))
-        (should (equal (cdr seen) '(my-backend my-model nil)))))))
-
-(ert-deftest mindbrook-test-timeout-aborts-request ()
-  (let ((mindbrook-ai-topic-timeout 0.2)
-        req aborted)
-    (cl-letf (((symbol-function 'gptel-request)
-               (lambda (_text &rest args) (setq req (plist-get args :buffer))))
-              ((symbol-function 'gptel-abort)
-               (lambda (buf) (setq aborted buf))))
-      (should-not (mindbrook--request-topic "text"))
-      (should (eq aborted req)))))
-
-(ert-deftest mindbrook-test-quit-while-waiting-skips-topic ()
-  "\\[keyboard-quit] while waiting for a topic only skips the suggestion."
-  (let (aborted)
-    (cl-letf (((symbol-function 'gptel-request) #'ignore)
-              ((symbol-function 'gptel-abort) (lambda (_) (setq aborted t)))
-              ((symbol-function 'accept-process-output)
-               (lambda (&rest _) (signal 'quit nil))))
-      (should-not (mindbrook--request-topic "text"))
-      (should aborted))))
-
-(ert-deftest mindbrook-test-failing-request-skips-topic ()
-  (let (aborted)
-    (cl-letf (((symbol-function 'gptel-request)
-               (lambda (&rest _) (error "No API key")))
-              ((symbol-function 'gptel-abort) (lambda (_) (setq aborted t))))
-      (should-not (mindbrook--request-topic "text"))
-      (should-not aborted))))
+    (let ((mindbrook-date-format "STAMP"))
+      (dolist (fn (list nil (lambda () nil) (lambda () " ... ")))
+        (with-temp-buffer
+          (rename-buffer "*notes*" t)
+          (insert "text")
+          (let ((mindbrook-topic-function fn))
+            (mindbrook-test--with-answers (:name (lambda (_) ""))
+              (should-error (mindbrook-save-as-scratchpad) :type 'user-error)))
+          (should (equal mindbrook-test--offered
+                         (list (format "STAMP %s.txt"
+                                       (mindbrook--sanitize-topic (buffer-name)))))))))))
 
 (ert-deftest mindbrook-test-unsaved-buffer-keeps-mode ()
   "A buffer with a major mode keeps it, whatever the extension."

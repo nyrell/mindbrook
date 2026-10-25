@@ -50,15 +50,20 @@ You can also set these variables directly in your Emacs configuration, for examp
 
 ### AI topic suggestions
 
-If [gptel](https://github.com/karthink/gptel) is installed and `mindbrook-ai-topic` is set to `ask`, you are asked whether to send the start of the buffer to gptel, which then suggests a topic for the file name. If the region is active, only the region is sent; if it is longer than the limit, you are asked whether to send all of it or only its start. Nothing is sent for a blank buffer, and the default (`nil`) never sends anything.
-
-* `mindbrook-ai-topic-context-size`: the number of characters sent, default 4000.
-* `mindbrook-ai-topic-timeout`: seconds to wait for the suggestion, default 30. `C-g` while waiting skips it.
+The optional `mindbrook-ai.el` suggests a topic for the file name from a [gptel](https://github.com/karthink/gptel) summary of the buffer. It is not loaded by `mindbrook`, and it never loads gptel itself: gptel must already be loaded and configured, or no topic is suggested.
 
 ```elisp
-(setq mindbrook-ai-topic 'ask)
+(require 'mindbrook-ai)
+(setq mindbrook-topic-function #'mindbrook-ai-topic)
 (global-set-key (kbd "C-c S") 'mindbrook-save-as-scratchpad)
 ```
+
+You are always asked before anything is sent. The start of the buffer is sent, or only the region if it is active; if the region is longer than the limit, you are asked whether to send all of it or only its start. Nothing is sent for a blank buffer.
+
+* `mindbrook-ai-context-size`: the number of characters sent, default 4000.
+* `mindbrook-ai-timeout`: seconds to wait for the suggestion, default 30. `C-g` while waiting skips it.
+
+`mindbrook-topic-function` can be any function that returns a topic string, or nil, when called in the buffer being saved.
 
 ## Example: BASB/PARA setup
 
