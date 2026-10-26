@@ -59,16 +59,28 @@ The optional `mindbrook-save.el` adds `mindbrook-save-as-scratchpad`, which save
 
 ### AI topic suggestions
 
-With `mindbrook-save-ai-topic` set to `ask`, one of the suggested names uses a topic from a [gptel](https://github.com/karthink/gptel) summary of the buffer. Mindbrook never loads gptel itself: it must already be loaded and configured, or no topic is suggested.
+If [gptel](https://github.com/karthink/gptel) is loaded, one of the suggested names uses a topic from a gptel summary of the buffer. Mindbrook never loads gptel itself: it must already be loaded and configured, or no topic is suggested. If gptel fails or gives an answer that is not a short topic, you are told why, and only the other name is suggested.
+
+`mindbrook-save-ai-topic` controls the feature:
+
+* `ask` (the default): you are asked before anything is sent.
+* `t`: the text is sent without asking. Think twice before choosing this, since the contents of any buffer you save are then sent to the gptel backend, which may be an outside service. It is meant for a backend you trust, such as a local model.
+* `nil`: no topic is suggested.
+
+The start of the buffer is sent, or only the region if it is active; if the region is longer than the limit, you are asked whether to send all of it or only its start. Nothing is sent for a blank buffer.
+
+* `mindbrook-save-ai-backend`: the name of the gptel backend to use, such as `"Ollama"`. The default (`nil`) uses the current gptel backend.
+* `mindbrook-save-ai-model`: the model to use, such as `llama3.2`. The default (`nil`) uses the current gptel model, or the first model of `mindbrook-save-ai-backend` if that is set.
+* `mindbrook-save-ai-context-size`: the number of characters sent, default 4000.
+* `mindbrook-save-ai-timeout`: seconds to wait for the suggestion, default 10. `C-g` while waiting skips it.
+
+For example, to use a local model without being asked:
 
 ```elisp
-(setopt mindbrook-save-ai-topic 'ask)
+(setopt mindbrook-save-ai-backend "Ollama"
+        mindbrook-save-ai-model 'llama3.2
+        mindbrook-save-ai-topic t)
 ```
-
-You are always asked before anything is sent. The start of the buffer is sent, or only the region if it is active; if the region is longer than the limit, you are asked whether to send all of it or only its start. Nothing is sent for a blank buffer.
-
-* `mindbrook-save-ai-context-size`: the number of characters sent, default 4000.
-* `mindbrook-save-ai-timeout`: seconds to wait for the suggestion, default 30. `C-g` while waiting skips it.
 
 ## Example: BASB/PARA setup
 

@@ -25,19 +25,24 @@
   "The text sent by the last stubbed `gptel-request'.")
 (defvar-local mindbrook-save-test--state nil
   "Buffer-local state that must survive saving.")
+(defvar mindbrook-save-test--failures nil
+  "The reasons given for missing AI topics, latest first.")
 
 (defmacro mindbrook-save-test--with-answers (answers &rest body)
   "Run BODY with stubbed answers for `mindbrook-save-as-scratchpad'.
 ANSWERS is a plist with :action (\"copy\" or \"move\"), :name (a
 function from the candidate list to the typed name), :send, :all and
 :save (answers to the yes-or-no questions) and :topic (the response of
-the stubbed `gptel-request').  gptel counts as loaded in BODY."
+the stubbed `gptel-request').  gptel counts as loaded in BODY, and the
+reasons for missing AI topics are collected in
+`mindbrook-save-test--failures'."
   (declare (indent 1))
   (let ((plist (make-symbol "answers"))
         (loaded (make-symbol "loaded")))
     `(let ((,plist (list ,@answers))
            (,loaded (featurep 'gptel-request)))
-       (setq mindbrook-save-test--offered nil)
+       (setq mindbrook-save-test--offered nil
+             mindbrook-save-test--failures nil)
        (provide 'gptel-request)
        (unwind-protect
            (cl-letf (((symbol-function 'read-multiple-choice)
@@ -53,6 +58,11 @@ the stubbed `gptel-request').  gptel counts as loaded in BODY."
                         (plist-get ,plist (cond ((string-prefix-p "Send" prompt) :send)
                                                 ((string-prefix-p "The region" prompt) :all)
                                                 (t :save)))))
+                     ((symbol-function 'mindbrook-save--ai-failed)
+                      (lambda (format-string &rest args)
+                        (push (apply #'format-message format-string args)
+                              mindbrook-save-test--failures)
+                        nil))
                      ((symbol-function 'gptel-request)
                       (lambda (text &rest args)
                         (setq mindbrook-save-test--sent text)
@@ -126,56 +136,155 @@ the stubbed `gptel-request').  gptel counts as loaded in BODY."
         (mindbrook-save-test--with-answers (:send t :all 'unexpected)
           (should (equal (mindbrook-save--ai-text) "bc")))))))
 
-(ert-deftest mindbrook-save-test-request-uses-own-buffer ()
-  "The request runs in a buffer of its own, set up from the current one.
-That buffer has the backend and model of the current buffer, and
-tools disabled."
-  (let ((mindbrook-save-ai-timeout 5)
-        seen)
+(ert-deftest mindbrook-save-test-ai-text-without-asking ()
+  "With `mindbrook-save-ai-topic' t the text is sent without asking."
+  (let ((mindbrook-save-ai-topic t))
     (with-temp-buffer
-      (setq-local gptel-backend 'my-backend)
-      (setq-local gptel-model 'my-model)
+      (insert "abc")
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Asked"))))
+        (should (equal (mindbrook-save--ai-text) "abc"))))))
+
+(ert-deftest mindbrook-save-test-ai-usable ()
+  (should (equal (mindbrook-save--ai-usable "  Rust borrow checker \n") "Rust borrow checker"))
+  (should-not (mindbrook-save--ai-usable nil))
+  (should-not (mindbrook-save--ai-usable "  "))
+  (should-not (mindbrook-save--ai-usable "Yes.\n\nSSH just runs a remote command"))
+  (should-not (mindbrook-save--ai-usable (make-string 81 ?x))))
+
+(ert-deftest mindbrook-save-test-ai-failed ()
+  "A failure is reported, and the topic is nil."
+  (let (shown)
+    (cl-letf (((symbol-function 'sit-for) #'ignore)
+              ((symbol-function 'message)
+               (lambda (&rest args) (setq shown (apply #'format-message args)))))
+      (should-not (mindbrook-save--ai-failed "no answer within %s seconds" 10)))
+    (should (equal shown "No AI topic suggestion: no answer within 10 seconds"))))
+
+(ert-deftest mindbrook-save-test-request-uses-own-buffer ()
+  "The request runs in a buffer of its own.
+That buffer has the given backend and model and tools disabled, and the
+text is marked off."
+  (let ((mindbrook-save-ai-timeout 5)
+        seen sent)
+    (with-temp-buffer
       (setq-local gptel-use-tools t)
       (cl-letf (((symbol-function 'gptel-request)
-                 (lambda (_text &rest args)
+                 (lambda (text &rest args)
                    (let ((buf (plist-get args :buffer)))
-                     (setq seen (list buf
+                     (setq sent text
+                           seen (list buf
                                       (buffer-local-value 'gptel-backend buf)
                                       (buffer-local-value 'gptel-model buf)
                                       (buffer-local-value 'gptel-use-tools buf))))
-                   (funcall (plist-get args :callback) "Topic\nmore" nil))))
-        (should (equal (mindbrook-save--ai-request "text") "Topic"))
+                   (funcall (plist-get args :callback) "Topic\n" nil))))
+        (should (equal (mindbrook-save--ai-request "text" 'my-backend 'my-model)
+                       "Topic"))
+        (should (equal sent "<text>\ntext\n</text>"))
         (should-not (eq (car seen) (current-buffer)))
         (should-not (buffer-live-p (car seen)))
         (should (equal (cdr seen) '(my-backend my-model nil)))))))
 
+(defmacro mindbrook-save-test--request (&rest body)
+  "Run BODY with failures collected in `mindbrook-save-test--failures'."
+  (declare (indent 0))
+  `(progn
+     (setq mindbrook-save-test--failures nil)
+     (cl-letf (((symbol-function 'mindbrook-save--ai-failed)
+                (lambda (format-string &rest args)
+                  (push (apply #'format-message format-string args)
+                        mindbrook-save-test--failures)
+                  nil)))
+       ,@body)))
+
+(ert-deftest mindbrook-save-test-unusable-answer-is-not-used ()
+  "An answer that is not a topic is reported, never cut to its first line."
+  (mindbrook-save-test--request
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (_text &rest args)
+                 (funcall (plist-get args :callback)
+                          "Yes. SSH just runs a remote command:\n\nssh host tail" nil))))
+      (should-not (mindbrook-save--ai-request "text" nil nil)))
+    (should (string-prefix-p "unusable answer from gptel: Yes. SSH"
+                             (car mindbrook-save-test--failures)))))
+
 (ert-deftest mindbrook-save-test-timeout-aborts-request ()
   (let ((mindbrook-save-ai-timeout 0.2)
         req aborted)
-    (cl-letf (((symbol-function 'gptel-request)
-               (lambda (_text &rest args) (setq req (plist-get args :buffer))))
-              ((symbol-function 'gptel-abort)
-               (lambda (buf) (setq aborted buf))))
-      (should-not (mindbrook-save--ai-request "text"))
-      (should (eq aborted req)))))
+    (mindbrook-save-test--request
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (_text &rest args)
+                   (setq req args)))
+                ((symbol-function 'gptel-abort)
+                 (lambda (buf)
+                   (setq aborted buf)
+                   ;; As gptel does, tell the callback.
+                   (funcall (plist-get req :callback) 'abort nil))))
+        (should-not (mindbrook-save--ai-request "text" nil nil))
+        (should (eq aborted (plist-get req :buffer)))))
+    (should (equal mindbrook-save-test--failures '("no answer within 0.2 seconds")))))
 
 (ert-deftest mindbrook-save-test-quit-while-waiting-skips-topic ()
   "\\[keyboard-quit] while waiting for a topic only skips the suggestion."
   (let (aborted)
-    (cl-letf (((symbol-function 'gptel-request) #'ignore)
-              ((symbol-function 'gptel-abort) (lambda (_) (setq aborted t)))
-              ((symbol-function 'accept-process-output)
-               (lambda (&rest _) (signal 'quit nil))))
-      (should-not (mindbrook-save--ai-request "text"))
-      (should aborted))))
+    (mindbrook-save-test--request
+      (cl-letf (((symbol-function 'gptel-request) #'ignore)
+                ((symbol-function 'gptel-abort) (lambda (_) (setq aborted t)))
+                ((symbol-function 'accept-process-output)
+                 (lambda (&rest _) (signal 'quit nil))))
+        (should-not (mindbrook-save--ai-request "text" nil nil))
+        (should aborted)))
+    (should (equal mindbrook-save-test--failures '("cancelled")))))
 
 (ert-deftest mindbrook-save-test-failing-request-skips-topic ()
   (let (aborted)
+    (mindbrook-save-test--request
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _) (error "No API key")))
+                ((symbol-function 'gptel-abort) (lambda (_) (setq aborted t))))
+        (should-not (mindbrook-save--ai-request "text" nil nil))
+        (should-not aborted)))
+    (should (equal mindbrook-save-test--failures '("gptel failed: No API key")))))
+
+(ert-deftest mindbrook-save-test-error-response-skips-topic ()
+  (mindbrook-save-test--request
     (cl-letf (((symbol-function 'gptel-request)
-               (lambda (&rest _) (error "No API key")))
-              ((symbol-function 'gptel-abort) (lambda (_) (setq aborted t))))
-      (should-not (mindbrook-save--ai-request "text"))
-      (should-not aborted))))
+               (lambda (_text &rest args)
+                 (funcall (plist-get args :callback) nil '(:status "HTTP 401")))))
+      (should-not (mindbrook-save--ai-request "text" nil nil)))
+    (should (equal mindbrook-save-test--failures '("gptel failed: HTTP 401")))))
+
+(ert-deftest mindbrook-save-test-ai-model ()
+  "The backend and model come from the options, or else from gptel."
+  (let ((gptel-backend 'current-backend)
+        (gptel-model 'current-model))
+    (cl-letf (((symbol-function 'gptel-get-backend)
+               (lambda (name)
+                 (if (equal name "Ollama") 'ollama (user-error "Unknown %s" name))))
+              ((symbol-function 'gptel-backend-models)
+               (lambda (_backend) '(llama3.2 mistral))))
+      (let ((mindbrook-save-ai-backend nil) (mindbrook-save-ai-model nil))
+        (should (equal (mindbrook-save--ai-model) '(current-backend . current-model))))
+      (let ((mindbrook-save-ai-backend nil) (mindbrook-save-ai-model 'other))
+        (should (equal (mindbrook-save--ai-model) '(current-backend . other))))
+      (let ((mindbrook-save-ai-backend "Ollama") (mindbrook-save-ai-model nil))
+        (should (equal (mindbrook-save--ai-model) '(ollama . llama3.2))))
+      (let ((mindbrook-save-ai-backend "Ollama") (mindbrook-save-ai-model 'mistral))
+        (should (equal (mindbrook-save--ai-model) '(ollama . mistral))))
+      (let ((mindbrook-save-ai-backend "Nope"))
+        (should-error (mindbrook-save--ai-model) :type 'user-error)))))
+
+(ert-deftest mindbrook-save-test-unknown-backend-sends-nothing ()
+  (let ((mindbrook-save-ai-topic 'ask)
+        (mindbrook-save-ai-backend "Nope"))
+    (with-temp-buffer
+      (insert "secret")
+      (setq mindbrook-save-test--sent nil)
+      (mindbrook-save-test--with-answers (:send t :topic "Leak")
+        (cl-letf (((symbol-function 'gptel-get-backend)
+                   (lambda (name) (user-error "Backend %s is not known" name))))
+          (should-not (mindbrook-save--ai-topic))))
+      (should-not mindbrook-save-test--sent)
+      (should (equal mindbrook-save-test--failures '("Backend Nope is not known"))))))
 
 (ert-deftest mindbrook-save-test-gptel-not-loaded ()
   "Without gptel loaded nothing is asked or sent, and gptel is not loaded.
@@ -218,7 +327,8 @@ An autoload for `gptel-request' must not count as gptel being loaded."
             (insert "* Explain the borrow checker")
             (mindbrook-save-test--with-answers (:send t :topic "Rust: borrow checker\n")
               (mindbrook-save-as-scratchpad))
-            (should (equal mindbrook-save-test--sent "* Explain the borrow checker"))
+            (should (equal mindbrook-save-test--sent
+                           "<text>\n* Explain the borrow checker\n</text>"))
             (should (equal mindbrook-save-test--offered
                            '("STAMP Rust borrow checker.org" "STAMP notes.org")))
             (should (equal buffer-file-name
