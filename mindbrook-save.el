@@ -91,6 +91,7 @@ When nil, the current `gptel-model' is used, or the first model of
 (declare-function gptel-abort "ext:gptel-request" (buf))
 (declare-function gptel-get-backend "ext:gptel-request" (name))
 (declare-function gptel-backend-models "ext:gptel-request" (backend))
+(declare-function gptel-backend-name "ext:gptel-request" (backend))
 
 (defconst mindbrook-save--ai-prompt
   "You name notes.  Reply with a short topic of at most six words that \
@@ -121,8 +122,9 @@ characters."
          (<= (length topic) mindbrook-save--ai-max-length)
          topic)))
 
-(defun mindbrook-save--ai-text ()
-  "Return the text to send for a topic, or nil if nothing is to be sent.
+(defun mindbrook-save--ai-text (destination)
+  "Return the text to send to DESTINATION, or nil if nothing is to be sent.
+DESTINATION names the backend and model in the question to the user.
 That is the active region, or else the buffer, cut to
 `mindbrook-save-ai-context-size' characters.  Nothing is sent for blank
 text, or if `mindbrook-save-ai-topic' is `ask' and the user declines.
@@ -136,9 +138,10 @@ A region over the limit is sent whole if the user wants to."
          (text (if (> (length all) limit) (substring all 0 limit) all)))
     (when (and (not (string-empty-p text))
                (or (eq mindbrook-save-ai-topic t)
-                   (y-or-n-p (format "Send %d characters of %s to gptel for a topic suggestion? "
+                   (y-or-n-p (format "Send %d characters of %s to %s for a topic suggestion? "
                                      (length text)
-                                     (if region "the region" (buffer-name))))))
+                                     (if region "the region" (buffer-name))
+                                     destination))))
       (if (and region
                (> (length all) limit)
                (y-or-n-p (format "The region is %d characters, over the limit of %d.  Send all of it anyway? "
@@ -212,6 +215,11 @@ Signal a `user-error' if `mindbrook-save-ai-backend' is unknown."
                   (car (gptel-backend-models backend))
                 gptel-model)))))
 
+(defun mindbrook-save--ai-destination (backend model)
+  "Return BACKEND and MODEL as a string such as \"xAI/grok-4.3\"."
+  (concat (if backend (gptel-backend-name backend) "gptel")
+          (and model (format "/%s" model))))
+
 (defun mindbrook-save--ai-topic ()
   "Return a topic for the current buffer suggested by gptel, or nil.
 Nothing is sent unless `mindbrook-save-ai-topic' is non-nil, gptel is
@@ -226,9 +234,11 @@ t, the user agrees to send it."
                  (mindbrook-save--ai-model)
                (error (mindbrook-save--ai-failed "%s" (error-message-string err))))
         (`(,backend . ,model)
-         (when-let* ((text (mindbrook-save--ai-text)))
-           (message "Asking gptel for a scratchpad topic...")
-           (mindbrook-save--ai-request text backend model)))))))
+         (let* ((destination (mindbrook-save--ai-destination backend model))
+                (text (mindbrook-save--ai-text destination)))
+           (when text
+             (message "Asking %s for a scratchpad topic..." destination)
+             (mindbrook-save--ai-request text backend model))))))))
 
 ;;;; Saving buffers as scratchpads
 

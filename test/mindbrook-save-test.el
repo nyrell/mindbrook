@@ -87,14 +87,14 @@ reasons for missing AI topics are collected in
   (let ((mindbrook-save-ai-context-size 5))
     (with-temp-buffer
       (mindbrook-save-test--with-answers (:send t)
-        (should-not (mindbrook-save--ai-text))
+        (should-not (mindbrook-save--ai-text "xAI/grok"))
         (insert "  \n\t ")
-        (should-not (mindbrook-save--ai-text))
+        (should-not (mindbrook-save--ai-text "xAI/grok"))
         (erase-buffer)
         (insert "abcdefghij")
-        (should (equal (mindbrook-save--ai-text) "abcde"))
+        (should (equal (mindbrook-save--ai-text "xAI/grok") "abcde"))
         (mindbrook-save-test--with-region 4 6
-          (should (equal (mindbrook-save--ai-text) "de")))))))
+          (should (equal (mindbrook-save--ai-text "xAI/grok") "de")))))))
 
 (ert-deftest mindbrook-save-test-long-buffer-is-cut-without-asking ()
   (let ((mindbrook-save-ai-context-size 3)
@@ -103,7 +103,7 @@ reasons for missing AI topics are collected in
       (insert "abcdefghij")
       (cl-letf (((symbol-function 'y-or-n-p)
                  (lambda (prompt) (push prompt asked) t)))
-        (should (equal (mindbrook-save--ai-text) "abc")))
+        (should (equal (mindbrook-save--ai-text "xAI/grok") "abc")))
       (should (= (length asked) 1))
       (should (string-prefix-p "Send 3 characters" (car asked))))))
 
@@ -115,26 +115,26 @@ reasons for missing AI topics are collected in
       (insert "abcdefghij")
       (mindbrook-save-test--with-region 2 9
         (mindbrook-save-test--with-answers (:send t :all t)
-          (should (equal (mindbrook-save--ai-text) "bcdefgh")))
+          (should (equal (mindbrook-save--ai-text "xAI/grok") "bcdefgh")))
         (mindbrook-save-test--with-answers (:send t :all nil)
-          (should (equal (mindbrook-save--ai-text) "bcd")))
+          (should (equal (mindbrook-save--ai-text "xAI/grok") "bcd")))
         ;; Declining to send anything asks nothing more.
         (cl-letf (((symbol-function 'y-or-n-p)
                    (lambda (prompt) (push prompt asked) nil)))
-          (should-not (mindbrook-save--ai-text)))
+          (should-not (mindbrook-save--ai-text "xAI/grok")))
         (should (equal (length asked) 1))
-        (should (string-prefix-p "Send 3 characters of the region" (car asked)))
+        (should (equal "Send 3 characters of the region to xAI/grok for a topic suggestion? " (car asked)))
         (should (string-match-p "region is 7 characters, over the limit of 3"
                                 (let (prompt)
                                   (cl-letf (((symbol-function 'y-or-n-p)
                                              (lambda (p) (setq prompt p) t)))
-                                    (mindbrook-save--ai-text))
+                                    (mindbrook-save--ai-text "xAI/grok"))
                                   prompt)))))
     (with-temp-buffer
       (insert "abcdefghij")
       (mindbrook-save-test--with-region 2 4
         (mindbrook-save-test--with-answers (:send t :all 'unexpected)
-          (should (equal (mindbrook-save--ai-text) "bc")))))))
+          (should (equal (mindbrook-save--ai-text "xAI/grok") "bc")))))))
 
 (ert-deftest mindbrook-save-test-ai-text-without-asking ()
   "With `mindbrook-save-ai-topic' t the text is sent without asking."
@@ -142,7 +142,13 @@ reasons for missing AI topics are collected in
     (with-temp-buffer
       (insert "abc")
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (error "Asked"))))
-        (should (equal (mindbrook-save--ai-text) "abc"))))))
+        (should (equal (mindbrook-save--ai-text "xAI/grok") "abc"))))))
+
+(ert-deftest mindbrook-save-test-ai-destination ()
+  (cl-letf (((symbol-function 'gptel-backend-name) (lambda (_) "OpenAI")))
+    (should (equal (mindbrook-save--ai-destination 'openai 'gpt-6-luna) "OpenAI/gpt-6-luna"))
+    (should (equal (mindbrook-save--ai-destination 'openai nil) "OpenAI")))
+  (should (equal (mindbrook-save--ai-destination nil nil) "gptel")))
 
 (ert-deftest mindbrook-save-test-ai-usable ()
   (should (equal (mindbrook-save--ai-usable "  Rust borrow checker \n") "Rust borrow checker"))
