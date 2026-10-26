@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Mattias Nyrell
 
 ;; Author: Mattias Nyrell <mattias@nyrell.se>
-;; Version: 0.4.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; URL: https://github.com/nyrell/mindbrook
 ;; Keywords: convenience

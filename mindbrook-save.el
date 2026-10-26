@@ -45,7 +45,7 @@ gptel must already be loaded; it is never loaded from here."
   :type '(choice (const :tag "Off" nil)
                  (const :tag "Ask before sending" ask)
                  (const :tag "Send without asking" t))
-  :package-version '(mindbrook . "0.4.0")
+  :package-version '(mindbrook . "0.3.0")
   :group 'mindbrook-save)
 
 (defcustom mindbrook-save-ai-context-size 4000
@@ -53,13 +53,13 @@ gptel must already be loaded; it is never loaded from here."
 If the region is active, the region is sent instead.  A region longer
 than this is sent whole only if the user agrees."
   :type 'integer
-  :package-version '(mindbrook . "0.4.0")
+  :package-version '(mindbrook . "0.3.0")
   :group 'mindbrook-save)
 
 (defcustom mindbrook-save-ai-timeout 10
   "Seconds to wait for gptel to suggest a topic."
   :type 'number
-  :package-version '(mindbrook . "0.4.0")
+  :package-version '(mindbrook . "0.3.0")
   :group 'mindbrook-save)
 
 (defcustom mindbrook-save-ai-backend nil
@@ -69,7 +69,7 @@ Otherwise it is a name as given to the gptel-make- function that
 defined the backend, such as \"Ollama\"."
   :type '(choice (const :tag "Current gptel backend" nil)
                  (string :tag "Backend name"))
-  :package-version '(mindbrook . "0.4.0")
+  :package-version '(mindbrook . "0.3.0")
   :group 'mindbrook-save)
 
 (defcustom mindbrook-save-ai-model nil
@@ -78,7 +78,7 @@ When nil, the current `gptel-model' is used, or the first model of
 `mindbrook-save-ai-backend' if that is set."
   :type '(choice (const :tag "Default model" nil)
                  (symbol :tag "Model"))
-  :package-version '(mindbrook . "0.4.0")
+  :package-version '(mindbrook . "0.3.0")
   :group 'mindbrook-save)
 
 ;;;; AI topic suggestions
