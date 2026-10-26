@@ -25,7 +25,7 @@ Or download it, place it on your load path and `require` it in your Emacs config
 (require 'mindbrook)
 ```
 
-# Configuration
+# Basic configuration
 Customize `mindbrook-dir` to specify where new scratchpads are created, default is `~/Documents/mindbrook`.
 
 Customize `mindbrook-template-dir` to specify where mindbrook looks for templates, default is `~/Documents/mindbrook/templates`.
@@ -44,43 +44,51 @@ You can also set these options directly in your Emacs configuration, for example
 (keymap-global-set "C-c s" #'mindbrook-new)
 ```
 
-## Saving any buffer as a scratchpad
+## Saving an existing buffer as a scratchpad
 
-The optional `mindbrook-save.el` adds `mindbrook-save-as-scratchpad`, which saves the current buffer as a scratchpad in `mindbrook-dir`. You pick the file name in the minibuffer from suggestions that start with the current timestamp, or type your own, including the extension.
+The optional `mindbrook-save.el` adds `mindbrook-save-as-scratchpad`, which saves the current buffer as a scratchpad in `mindbrook-dir`. You pick the file name in the minibuffer from suggestions that start with the current timestamp, or type your own.
 
 ```elisp
 (require 'mindbrook-save)
 (keymap-global-set "C-c S" #'mindbrook-save-as-scratchpad)
 ```
 
-* A buffer that is not visiting a file is saved to the new scratchpad. The suggested extension follows the major mode (`.org`, `.md` or `.txt`). The buffer keeps its major mode, unless it is in `fundamental-mode`.
-* For a buffer visiting a file you choose to **copy** or **move** the file. After a copy you are switched to the copy; after a move the buffer follows the file. A buffer with unsaved changes must be saved first. One suggestion is the current file name prefixed with the timestamp.
-* Files already in `mindbrook-dir`, and buffers such as Dired or help buffers, are refused.
+* A buffer without an associated file is just saved to the new scratchpad. The suggested extension follows the major mode (`.org`, `.md` or `.txt`). The buffer keeps its major mode, unless it is in `fundamental-mode`. (This is to not cause problems for gptel-agent buffers.)
+* For a buffer visiting a file you choose to **copy** or **move** the file. A buffer with unsaved changes must be saved first. 
+
 
 ### AI topic suggestions
 
-If [gptel](https://github.com/karthink/gptel) is loaded, one of the suggested names uses a topic from a gptel summary of the buffer. Mindbrook never loads gptel itself: it must already be loaded and configured, or no topic is suggested. If gptel fails or gives an answer that is not a short topic, you are told why, and only the other name is suggested.
+If [gptel](https://github.com/karthink/gptel) is loaded, it is possible to get a name suggestion based on a gptel summary of the buffer. Mindbrook never loads gptel itself: it must already be loaded and configured, or no topic is suggested. I find this useful when saving gptel-agent sessions.
 
 `mindbrook-save-ai-topic` controls the feature:
 
-* `ask` (the default): you are asked before anything is sent.
-* `t`: the text is sent without asking. Think twice before choosing this, since the contents of any buffer you save are then sent to the gptel backend, which may be an outside service. It is meant for a backend you trust, such as a local model.
-* `nil`: no topic is suggested.
+* `ask` (the default): you are asked before anything is sent to the model.
+* `t`: the text is sent without asking. Make sure you are OK with sending your data to the model before you enable this, since the contents of any buffer you use the feature on are then sent to the gptel backend, which may be an outside service. It is meant for a backend you trust, such as a local model.
+* `nil`: this feature is disabled.
 
-The start of the buffer is sent, or only the region if it is active; if the region is longer than the limit, you are asked whether to send all of it or only its start. Nothing is sent for a blank buffer.
+The start of the buffer up to `mindbrook-save-ai-context-size` is sent to the model, or if the region is active only the region is sent.
 
 * `mindbrook-save-ai-backend`: the name of the gptel backend to use, such as `"Ollama"`. The default (`nil`) uses the current gptel backend.
 * `mindbrook-save-ai-model`: the model to use, such as `llama3.2`. The default (`nil`) uses the current gptel model, or the first model of `mindbrook-save-ai-backend` if that is set.
-* `mindbrook-save-ai-context-size`: the number of characters sent, default 4000.
-* `mindbrook-save-ai-timeout`: seconds to wait for the suggestion, default 10. `C-g` while waiting skips it.
+* `mindbrook-save-ai-context-size`: the number of characters sent (default 4000).
+* `mindbrook-save-ai-timeout`: seconds to wait for the suggestion (default 10). `C-g` while waiting skips it and aborts the gptel request.
 
 For example, to use a local model without being asked:
 
 ```elisp
-(setopt mindbrook-save-ai-backend "Ollama"
-        mindbrook-save-ai-model 'llama3.2
-        mindbrook-save-ai-topic t)
+(setopt mindbrook-save-ai-backend "Ollama")
+(setopt mindbrook-save-ai-model 'llama3.2)
+(setopt mindbrook-save-ai-topic t)
 ```
+
+Or a remote model:
+```elisp
+(setopt mindbrook-save-ai-backend "OpenAI")
+(setopt mindbrook-save-ai-model 'gpt-6-luna)
+(setopt mindbrook-save-ai-topic 'ask)
+```
+
 
 ## Example: BASB/PARA setup
 
