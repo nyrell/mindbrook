@@ -18,6 +18,7 @@
 (defvar gptel-backend nil)
 (defvar gptel-model nil)
 (defvar gptel-use-tools nil)
+(defvar gptel-use-context nil)
 
 (defvar mindbrook-save-test--offered nil
   "The file name candidates offered by the last stubbed prompt.")
@@ -168,12 +169,13 @@ reasons for missing AI topics are collected in
 
 (ert-deftest mindbrook-save-test-request-uses-own-buffer ()
   "The request runs in a buffer of its own.
-That buffer has the given backend and model and tools disabled, and the
-text is marked off."
+That buffer has the given backend and model, tools and context disabled,
+and the text is marked off."
   (let ((mindbrook-save-ai-timeout 5)
         seen sent)
     (with-temp-buffer
       (setq-local gptel-use-tools t)
+      (setq-local gptel-use-context 'system)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (text &rest args)
                    (let ((buf (plist-get args :buffer)))
@@ -181,14 +183,16 @@ text is marked off."
                            seen (list buf
                                       (buffer-local-value 'gptel-backend buf)
                                       (buffer-local-value 'gptel-model buf)
-                                      (buffer-local-value 'gptel-use-tools buf))))
+                                      (buffer-local-value 'gptel-use-tools buf)
+                                      (buffer-local-value 'gptel-use-context buf))))
                    (funcall (plist-get args :callback) "Topic\n" nil))))
         (should (equal (mindbrook-save--ai-request "text" 'my-backend 'my-model)
                        "Topic"))
-        (should (equal sent "<text>\ntext\n</text>"))
+        (should (string-prefix-p "<text>\ntext\n</text>\n" sent))
+        (should (equal sent (format mindbrook-save--ai-message "text")))
         (should-not (eq (car seen) (current-buffer)))
         (should-not (buffer-live-p (car seen)))
-        (should (equal (cdr seen) '(my-backend my-model nil)))))))
+        (should (equal (cdr seen) '(my-backend my-model nil nil)))))))
 
 (defmacro mindbrook-save-test--request (&rest body)
   "Run BODY with failures collected in `mindbrook-save-test--failures'."
@@ -334,7 +338,8 @@ An autoload for `gptel-request' must not count as gptel being loaded."
             (mindbrook-save-test--with-answers (:send t :topic "Rust: borrow checker\n")
               (mindbrook-save-as-scratchpad))
             (should (equal mindbrook-save-test--sent
-                           "<text>\n* Explain the borrow checker\n</text>"))
+                           (format mindbrook-save--ai-message
+                                   "* Explain the borrow checker")))
             (should (equal mindbrook-save-test--offered
                            '("STAMP Rust borrow checker.org" "STAMP notes.org")))
             (should (equal buffer-file-name
